@@ -1,0 +1,389 @@
+---
+title: "06_R-intro_examen"
+output: html_document
+date: "2023-03-14"
+author: <nombre>
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+## carga aquí las librerías que vayas necesitando
+library(readr)
+library("DataExplorer")
+library("tidyverse")
+library(dbplyr)
+library("ggplot2")
+library(rsample)
+library(caret)
+library(randomForest)
+library(caTools)
+library(xgboost)
+library("rmarkdown")
+```
+
+## Carga de datos
+
+```{r}
+## lee los datos
+url <-"https://raw.githubusercontent.com/pvbl/churn-modeling-telco-data/main/telco_dataset.csv"
+datos <- read.csv(url)
+
+head(datos)
+```
+
+# Análisis de datos
+
+```{r}
+# mira la tipología de cada una de las variables (str,int,float),...
+# chequea tenga coherencia (que esté cargando correctamente los numéricos, str,...). En caso de que no sea así, identifica y corrige el problema.
+# haz un gráfico de las columnas y su tipo con DataExplorer (plot_str)
+str(datos)
+
+plot_str(datos)
+```
+
+```{r}
+## muestra el número de filas y columnas
+nfilas <- nrow(datos)
+ncolumnas <- ncol(datos)
+cat("Número de filas:", nfilas, "\n")
+cat("Número de columnas:", ncolumnas)
+```
+
+```{r}
+## muestra un sumary de los datos
+summary(datos)
+```
+
+```{r}
+##¿Existe alguna(s) variable(s) que sea constante (tenga todos los valores iguales)? Usa para ello la función n_distinct de tidyverse
+## Si es así eliminala(s)
+
+
+# Comprobación de si hay variables constantes
+constantes <- datos %>%
+  summarise_all(n_distinct) %>%
+  gather(variable, n_distinct) %>%
+  filter(n_distinct == 1)
+
+# Mostrar las variables constantes, si las hay
+if (nrow(constantes) > 0) {
+  print("Variables constantes:")
+  print(constantes)
+  
+  # Eliminar variables constantes
+  datos_sin_constantes <- datos %>%
+    select(-one_of(names(constantes)))
+
+  # Verificar la estructura del nuevo dataframe
+  str(datos_sin_constantes)
+} else {
+  print("No hay variables constantes.")
+}
+
+```
+
+```{r}
+# Evalúa el número de duplicados. En caso de que haya, ¿cuantos hay? Eliminalos
+
+# Identificamos el numero de datos que estan duplicados
+numero_duplicados <- sum(duplicated(datos))
+
+# Mostramos cuantos duplicados hay
+if (numero_duplicados > 0) {
+  print(paste("Número de duplicados:", numero_duplicados))
+} else {
+  print("No hay duplicados")
+}
+
+# ELiminamos el numero de duplicados
+datos_sin_duplicados <- datos %>%
+  distinct()
+
+cat("\n")
+
+# Estructura que presenta tras eliminar duplicados  
+str(datos_sin_duplicados)  
+  
+
+```
+
+```{r}
+# idenfica si después de eliminar los duplicados, existe algún customerID duplicado
+
+# Comprobamos si hay duplicados en customerID despues de eliminar los duplicados
+customerID_duplicados <- datos_sin_duplicados %>%
+  select(customerID) %>%
+  duplicated()
+
+
+if (sum(customerID_duplicados)>0) {
+  print("Hay customerID duplicados")
+} else {
+  print("No hay customerID duplicados")
+}
+
+cat("\n")
+str(datos)
+```
+
+```{r}
+# Haz un descriptivo con plot_intro de DataExplorer
+plot_intro(datos)
+```
+
+¿Existen valores NaNs?
+
+```{r}
+# plotea los missing values con Data Explorer
+plot_missing(datos)
+```
+
+```{r}
+# haz un summary del subset del dataframe que contenga los nans (filtra el dataframe con todos los nans y haz un sumary)
+datos_con_nan <- datos[rowSums(is.na(datos)) > 0,]
+summary(datos_con_nan)
+```
+
+```{r}
+# evalúa cual es el valor más frecuente de la variable tenure para el subset anterior. Luego mira dentro de todo el dataframe, cuantas veces aparece repetido ese valor más frecuente. ¿Qué crees que puede decirnos esto?
+# A qué crees que se debe esto? ¿Qué valor crees que hay que imputar en los NaNs¿
+
+# Valor mas frecuente de tenure
+valor_mas_frecuente <- names(sort(table(subset(datos_sin_duplicados, select = "tenure")), decreasing = TRUE))[1]
+
+# Número de veces que aparece
+repeticiones_del_valor_mas_frecuente <- sum(datos_sin_duplicados$tenure == valor_mas_frecuente)
+
+# Imprimir el resultado
+cat("El valor más frecuente de la variable 'tenure' en el subset es:", valor_mas_frecuente, "\n")
+cat("Este valor se repite", repeticiones_del_valor_mas_frecuente, "veces en todo el dataframe.\n")
+```
+
+```{r}
+# imputa el valor de los nans a la columna TotalCharges
+
+# Calculo de la mediana de TotalCharges
+mediana_total_charges <- median(datos_sin_duplicados$TotalCharges, na.rm = TRUE)
+
+# Imputamos los NaN en TotalCharges
+datos_sin_duplicados <- datos_sin_duplicados %>%
+  mutate(TotalCharges = ifelse(is.na(TotalCharges), mediana_total_charges, TotalCharges))
+```
+
+```{r}
+# chequea que no hay missing values ahora
+
+# Verifica si hay valores faltantes
+valores_faltantes <- sum(is.na(datos_sin_duplicados))
+
+if (valores_faltantes > 0) {
+  print("Número total de valores faltantes:", valores_faltantes)
+} else {
+  print("No hay valores faltantes")
+}
+
+```
+
+```{r}
+# analisis del numero de ceros total
+## saca el número de ceros que tiene cada columna
+## ¿ Qué columna tiene más ceros y a qué se debe?
+
+# Estimar numero de ceros en cada columna
+num_ceros_por_columna <- colSums(datos_sin_duplicados == 0, na.rm = TRUE)
+
+print("Número de ceros por columna:") 
+print(num_ceros_por_columna)
+
+# Identificamos columna con mas ceros
+columna_con_mas_ceros <- names(which.max(num_ceros_por_columna))
+num_ceros_max <- max(num_ceros_por_columna)
+
+print(paste("La columna con mas ceros es:", columna_con_mas_ceros))
+print(paste("Numero de ceros que tiene:", num_ceros_max))
+
+```
+
+## Tratamiento categóricas
+
+```{r}
+# transforma las variables tipo str a factor. Usa para ello la función 
+## mutate_if(dataframe,condicion,funcion de conversion)
+datos <- mutate_if(datos, is.character, as.factor)
+```
+
+## Visualización
+
+```{r}
+# haz un histograma con ggplot2 de tenure que tenga coloreado los bines según el churn
+
+ggplot(datos, aes(x = tenure, fill = Churn)) +
+  geom_histogram(binwidth = 5, position = "identity", alpha = 0.6) +
+  labs(title = "Histograma de Tenure coloreado en función del Churn",
+       x = "Tenure",
+       y = "Frecuencia") +
+  scale_fill_manual(values = c("No" = "blue", "Yes" = "red")) +
+  theme_minimal()
+```
+
+```{r}
+# haz un gráfico de barras de la variable PhoneServices y que esté coloreado con el Churn
+
+ggplot(datos_sin_duplicados, aes(x = PhoneService, fill = Churn)) +
+  geom_bar(position = "dodge", alpha = 0.7) +
+  labs(title = "Gráfico de Barras de PhoneService coloreado por Churn",
+       x = "PhoneService",
+       y = "Frecuencia") +
+  scale_fill_manual(values = c("No" = "blue", "Yes" = "red")) +
+  theme_minimal()
+
+```
+
+```{r}
+# haz una gráfica de puntos de total charges en el eje de las y y Monthly Charges en el eje de las X, colorea según la variable Contract la gráfica tiene una forma particular, a qué crees que se debe?
+
+ggplot(datos_sin_duplicados, aes(x = MonthlyCharges, y = TotalCharges, color = Contract)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "Gráfico de puntos de TotalCharges vs MonthlyCharges",
+       x = "Monthly Charges",
+       y = "Total Charges")
+
+# Podemos pensar que crecen las cargas (lo contrario al churn) mas rapido que las fugas (churn)
+```
+
+```{r}
+# haz un report de dataexplorer en el que estén los histogramas
+## ¿Qué tipo de distribución ves en MonthlyCharges, qué particularidad tiene?
+## 
+reporte <- create_report(datos)
+
+# Muestra el informe
+reporte
+```
+
+```{r}
+# utiliza la función de plot_correlation de dataexplorer, pon que el tipo de variables a evaluar son sólo las tipo "continuous"
+## ¿ves algunas variables que tengan una correlación alta y que puedan significar lo mismo (>0.90)?
+## elimina aquella que creas más conveniente
+# Utiliza la función plot_correlation() para visualizar la matriz de correlación
+plot_correlation(datos_sin_duplicados, type = "continuous")
+
+
+```
+
+# Modelización
+
+```{r}
+# haz una división train test split usando initial_split con una prop de 3/4 de la librería rsample
+# elimina la varible del df CustomerID (si no lo has hecho antes)
+
+# Dividimos el dataframe en entrenamiento y prueba pero debemos utilizar el seed 
+# para que sea reproducible
+set.seed(123) 
+split <- initial_split(datos_sin_duplicados, prop = 3/4)
+
+# Obtener los conjuntos de entrenamiento y prueba
+train_data <- training(split)
+test_data <- testing(split)
+
+# Ver las dimensiones de los conjuntos de entrenamiento y prueba
+print("Dimensiones del entrenamiento:")
+print(dim(train_data))
+print("Dimensiones de la prueba:")
+print(dim(test_data))
+```
+
+## Random Forest con caret
+
+```{r}
+# haz un random forest con caret, usa el siguiente trainControl para ello, la métrica de optimización es la ROC (metric=ROC) 
+# evalúa el performance del modelo como con el árbol de decisión
+# plotea la importancia de las variables
+# plotea la curva ROC usando la librería caTools
+# ¿piensas que son los resultados congruentes a partir del feature importance?
+
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary)
+
+# Entrenar un modelo de Random Forest y que sea reproducible
+set.seed(123) 
+modelo_rf <- train(x = train_data[, -which(names(train_data) == "Churn")],  
+                   y = train_data$Churn,  
+                   method = "rf",  
+                   trControl = ctrl) 
+
+# rendimiento del modelo
+print(modelo_rf)
+
+# Importancia de las variables
+varImp(modelo_rf)
+
+# Estimar las probabilidades de clase en los datos para test test
+predicciones <- predict(modelo_rf, newdata = test_data, type = "prob")
+
+# Curva ROC
+colores_roc <- ifelse(test_data$Churn == "No", "blue", "red")
+roc_curve <- colAUC(predicciones[, "Yes"], as.factor(test_data$Churn), plotROC = TRUE)
+
+
+
+```
+
+## XGboost
+
+```{r message=FALSE, warning=FALSE}
+# haz un xgboost con caret, usa el trainControl anterior (del randomforest) para ello, la métrica de optimización es la ROC (metric=ROC) 
+# evalúa el performance del modelo como con el árbol de decisión
+# plotea la importancia de las variables
+# plotea la curva ROC usando la librería caTools
+# Comenta qué pasos seguirías realizando para seguir mejorando el modelo.
+
+# Entrenar un modelo XGBoost
+set.seed(123)  # Para reproducibilidad
+modelo_xgb <- train(x = train_data[, -which(names(train_data) == "Churn")],  # Características
+                    y = train_data$Churn,  # Variable objetivo
+                    method = "xgbTree",  # XGBoost
+                    trControl = ctrl,  # Control de entrenamiento
+                    metric = "ROC")  # Métrica de optimización
+
+# Evaluar el rendimiento del modelo
+print(modelo_xgb)
+
+# Me salen valores de tipo NA y NaN ;(
+
+```
+
+## (OPCIONAL)Decision tree con rcart
+
+```{r}
+# haz un arbol de decision con rpart (manten el seed)
+# evalua sus métricas con la función ConfusionMatrix de caret
+# plotea el arbol de decision y su feature importance
+# usa rpart.rules para ver las reglas del árbol
+# A continuación, haz el mismo proceso pero cambia el seed a 555, ¿cambia el árbol? ¿Es igual la feature importance?¿ Y la estructura del árbol? Si cambia, a que crees que se debe?
+## Evalúa la feature importance del primer modelo, ¿tiene lógica de negocio?
+```
+
+```{r}
+set.seed(200)
+
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     classProbs = T,
+                     summaryFunction = twoClassSummary)
+```
+
+```{r}
+set.seed(555)
+
+```
+
+```{r}
+rmarkdown::render("06_Rintro_examen Jesús Arnanz Guío.Rmd")
+```
